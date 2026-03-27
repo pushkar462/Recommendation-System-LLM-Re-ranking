@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Two-Stage RecSys Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --surface2: #1a1a24;
+    --border: #2a2a38;
+    --accent: #7c6af7;
+    --accent2: #4ecdc4;
+    --accent3: #f7c26a;
+    --text: #e8e8f0;
+    --muted: #6b6b85;
+    --danger: #f76a6a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Syne', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(124,106,247,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,106,247,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  header {
+    padding: 48px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(124,106,247,0.12);
+    border: 1px solid rgba(124,106,247,0.3);
+    color: var(--accent);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    font-size: clamp(28px, 5vw, 48px);
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+
+  h1 span { color: var(--accent); }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 15px;
+    margin-top: 10px;
+    font-weight: 400;
+    max-width: 560px;
+  }
+
+  /* Pipeline diagram */
+  .pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 32px 0;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .pipe-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .pipe-box {
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: 'DM Mono', monospace;
+    font-weight: 500;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+
+  .pipe-box.stage1 { background: rgba(78,205,196,0.08); border-color: rgba(78,205,196,0.3); color: var(--accent2); }
+  .pipe-box.stage2 { background: rgba(124,106,247,0.08); border-color: rgba(124,106,247,0.3); color: var(--accent); }
+  .pipe-box.output { background: rgba(247,194,106,0.08); border-color: rgba(247,194,106,0.3); color: var(--accent3); }
+
+  .pipe-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  .pipe-arrow {
+    color: var(--border);
+    font-size: 20px;
+    margin: 0 4px;
+    align-self: center;
+    margin-top: -16px;
+  }
+
+  /* Controls */
+  .controls-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  @media (max-width: 640px) { .controls-grid { grid-template-columns: 1fr; } }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+  }
+
+  select, input[type="text"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: 'Syne', sans-serif;
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+
+  select:focus, input:focus {
+    border-color: var(--accent);
+  }
+
+  .context-field {
+    grid-column: 1 / -1;
+  }
+
+  /* Buttons */
+  .btn-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: 'Syne', sans-serif;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+  }
+  .btn-primary:hover { background: #9181f9; transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  .btn-secondary {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Output sections */
+  .sections {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 40px;
+  }
+
+  @media (max-width: 800px) { .sections { grid-template-columns: 1fr; } }
+
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .section-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .section-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .stage-pill {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 400;
+  }
+
+  .stage-pill.s1 { background: rgba(78,205,196,0.15); color: var(--accent2); }
+  .stage-pill.s2 { background: rgba(124,106,247,0.15); color: var(--accent); }
+
+  .section-count {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .section-body { padding: 16px 20px; }
+
+  /* Items */
+  .item-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .item {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--surface2);
+    border: 1px solid transparent;
+    transition: border-color 0.2s;
+  }
+
+  .item:hover { border-color: var(--border); }
+
+  .item-rank {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 24px;
+    padding-top: 2px;
+  }
+
+  .item-info { flex: 1; min-width: 0; }
+
+  .item-title {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+
+  .tag {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.05);
+    color: var(--muted);
+  }
+
+  .tag.genre { color: var(--accent2); background: rgba(78,205,196,0.08); }
+
+  .item-reason {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    font-style: italic;
+    line-height: 1.5;
+  }
+
+  .score-bar {
+    width: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    padding-top: 2px;
+  }
+
+  .score-val {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: var(--accent3);
+  }
+
+  .score-track {
+    width: 32px;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .score-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    border-radius: 2px;
+  }
+
+  /* Summary box */
+  .summary-box {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(124,106,247,0.06);
+    border: 1px solid rgba(124,106,247,0.2);
+    border-radius: 8px;
+  }
+
+  .summary-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+
+  .summary-text { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+  /* History section */
+  .history-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 24px;
+  }
+
+  .history-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 16px 20px;
+  }
+
+  .history-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--surface2);
+    border-radius: 6px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+  }
+
+  .history-chip .stars { color: var(--accent3); font-size: 11px; }
+
+  /* Loading */
+  .loading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    padding: 32px 20px;
+  }
+
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty {
+    color: var(--muted);
+    font-size: 13px;
+    font-family: 'DM Mono', monospace;
+    padding: 32px 20px;
+    text-align: center;
+  }
+
+  .error-box {
+    background: rgba(247,106,106,0.08);
+    border: 1px solid rgba(247,106,106,0.3);
+    color: var(--danger);
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: 'DM Mono', monospace;
+    margin-bottom: 16px;
+  }
+
+  /* Diff highlight */
+  .rank-moved { outline: 1px dashed rgba(124,106,247,0.25); }
+  .rank-up { color: var(--accent2); }
+  .rank-down { color: var(--danger); }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 0;
+    margin-top: 40px;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>Recommendation System<br><span>+ LLM Re-ranking</span></h1>
+    <p class="subtitle">Two-stage pipeline: Matrix Factorisation generates candidates, then Claude re-prioritises based on user context. The same pattern used by Google, YouTube & LinkedIn.</p>
+
+    <div class="pipeline">
+      <div class="pipe-node">
+        <div class="pipe-box stage1">User Ratings (R)</div>
+        <div class="pipe-label">Input</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">
+        <div class="pipe-box stage1">SVD / Matrix Factorisation</div>
+        <div class="pipe-label">Stage 1 — CF</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">
+        <div class="pipe-box stage1">Top-K Candidates</div>
+        <div class="pipe-label">~20 items</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">
+        <div class="pipe-box stage2">Claude LLM Re-ranker</div>
+        <div class="pipe-label">Stage 2 — Context</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">
+        <div class="pipe-box output">Final Recommendations</div>
+        <div class="pipe-label">Top-10</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Controls -->
+  <div class="controls-grid">
+    <div class="field">
+      <label>User</label>
+      <select id="userSelect">
+        <option value="alice">alice — Drama / Sci-Fi fan</option>
+        <option value="bob">bob — Action / Sci-Fi fan</option>
+        <option value="carol">carol — Animation / Drama fan</option>
+        <option value="dave">dave — Crime / Thriller fan</option>
+        <option value="eve">eve — Sci-Fi / Fantasy fan</option>
+        <option value="frank">frank — Romance / Drama fan</option>
+        <option value="grace">grace — Horror / Thriller fan</option>
+        <option value="henry">henry — Mystery / Crime fan</option>
+        <option value="isabella">isabella — Animation / Romance fan</option>
+        <option value="jack">jack — Action / Adventure fan</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Dataset</label>
+      <select id="datasetSelect">
+        <option value="movies">🎬 Movies (MovieLens-style)</option>
+        <option value="products">📦 Products (Amazon-style)</option>
+      </select>
+    </div>
+    <div class="field context-field">
+      <label>User Context / Mood (optional — sent to LLM re-ranker)</label>
+      <input type="text" id="contextInput" placeholder='e.g. "I want something light and funny tonight" or "In the mood for mind-bending sci-fi"' />
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" id="runBtn" onclick="runPipeline()">
+      ▶ Run Full Pipeline
+    </button>
+    <button class="btn btn-secondary" onclick="runStage1Only()">
+      Stage 1 Only (MF Candidates)
+    </button>
+  </div>
+
+  <div id="errorBox" style="display:none"></div>
+
+  <!-- User history -->
+  <div id="historySection" style="display:none" class="history-section">
+    <div class="section-header">
+      <div class="section-title">📚 User Rating History</div>
+      <div class="section-count" id="historyCount"></div>
+    </div>
+    <div class="history-row" id="historyRow"></div>
+  </div>
+
+  <!-- Stage outputs -->
+  <div class="sections">
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <span class="stage-pill s1">STAGE 1</span>
+          MF Candidates
+        </div>
+        <div class="section-count" id="stage1Count">—</div>
+      </div>
+      <div class="section-body" id="stage1Body">
+        <div class="empty">Run the pipeline to see results</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <span class="stage-pill s2">STAGE 2</span>
+          LLM Re-ranked
+        </div>
+        <div class="section-count" id="stage2Count">—</div>
+      </div>
+      <div class="section-body" id="stage2Body">
+        <div class="empty">Run the pipeline to see results</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer class="container">
+  <span>Two-Stage RecSys · Matrix Factorisation + Claude LLM Re-ranking</span>
+  <span>Patterns: Google Ads · YouTube · LinkedIn</span>
+</footer>
+
+<script>
+// ── Synthetic data (mirrors Python dataset.py) ────────────────────────────────
+
+const MOVIES = [
+  {item_id:"m1", title:"The Shawshank Redemption", genre:"Drama", year:1994, tags:["prison","hope","friendship"]},
+  {item_id:"m2", title:"The Godfather", genre:"Crime", year:1972, tags:["mafia","family","classic"]},
+  {item_id:"m3", title:"The Dark Knight", genre:"Action", year:2008, tags:["superhero","batman","joker"]},
+  {item_id:"m4", title:"Pulp Fiction", genre:"Crime", year:1994, tags:["nonlinear","cult","violence"]},
+  {item_id:"m5", title:"Forrest Gump", genre:"Drama", year:1994, tags:["inspirational","history","heartwarming"]},
+  {item_id:"m6", title:"Inception", genre:"Sci-Fi", year:2010, tags:["dreams","heist","mind-bending"]},
+  {item_id:"m7", title:"The Matrix", genre:"Sci-Fi", year:1999, tags:["cyberpunk","action","philosophy"]},
+  {item_id:"m8", title:"Goodfellas", genre:"Crime", year:1990, tags:["mafia","biography","violence"]},
+  {item_id:"m9", title:"Interstellar", genre:"Sci-Fi", year:2014, tags:["space","time","emotional"]},
+  {item_id:"m10", title:"Fight Club", genre:"Drama", year:1999, tags:["twist","anarchy","identity"]},
+  {item_id:"m11", title:"The Silence of the Lambs", genre:"Thriller", year:1991, tags:["serial-killer","psychological","FBI"]},
+  {item_id:"m12", title:"Schindler's List", genre:"Drama", year:1993, tags:["holocaust","history","biography"]},
+  {item_id:"m13", title:"The Lord of the Rings", genre:"Fantasy", year:2001, tags:["epic","adventure","tolkien"]},
+  {item_id:"m14", title:"Star Wars: A New Hope", genre:"Sci-Fi", year:1977, tags:["space","jedi","classic"]},
+  {item_id:"m15", title:"Avengers: Endgame", genre:"Action", year:2019, tags:["superhero","MCU","epic"]},
+  {item_id:"m16", title:"Parasite", genre:"Thriller", year:2019, tags:["class","korean","twist"]},
+  {item_id:"m17", title:"Spirited Away", genre:"Animation", year:2001, tags:["anime","magical","miyazaki"]},
+  {item_id:"m18", title:"The Lion King", genre:"Animation", year:1994, tags:["disney","family","classic"]},
+  {item_id:"m19", title:"Titanic", genre:"Romance", year:1997, tags:["love","disaster","epic"]},
+  {item_id:"m20", title:"Toy Story", genre:"Animation", year:1995, tags:["pixar","friendship","family"]},
+  {item_id:"m21", title:"Se7en", genre:"Thriller", year:1995, tags:["detective","dark","twist"]},
+  {item_id:"m22", title:"Back to the Future", genre:"Sci-Fi", year:1985, tags:["time-travel","comedy","classic"]},
+  {item_id:"m23", title:"Jurassic Park", genre:"Adventure", year:1993, tags:["dinosaurs","action","sci-fi"]},
+  {item_id:"m24", title:"The Truman Show", genre:"Drama", year:1998, tags:["reality","philosophical","unique"]},
+  {item_id:"m25", title:"Coco", genre:"Animation", year:2017, tags:["family","music","culture"]},
+  {item_id:"m26", title:"Knives Out", genre:"Mystery", year:2019, tags:["whodunit","comedy","modern"]},
+  {item_id:"m27", title:"Whiplash", genre:"Drama", year:2014, tags:["music","ambition","intense"]},
+  {item_id:"m28", title:"Get Out", genre:"Horror", year:2017, tags:["race","social","twist"]},
+  {item_id:"m29", title:"Everything Everywhere", genre:"Sci-Fi", year:2022, tags:["multiverse","family","absurd"]},
+  {item_id:"m30", title:"Dune", genre:"Sci-Fi", year:2021, tags:["epic","desert","politics"]},
+];
+
+const PRODUCTS = [
+  {item_id:"p1", title:"Sony WH-1000XM5 Headphones", genre:"Electronics", year:2022, tags:["noise-cancelling","wireless","premium"]},
+  {item_id:"p2", title:"Kindle Paperwhite", genre:"Electronics", year:2021, tags:["e-reader","portable","books"]},
+  {item_id:"p3", title:"Instant Pot Duo 7-in-1", genre:"Kitchen", year:2020, tags:["pressure-cooker","multi-use","time-saving"]},
+  {item_id:"p4", title:"LEGO Architecture Set", genre:"Toys", year:2023, tags:["creative","display","adult-fans"]},
+  {item_id:"p5", title:"Anker PowerCore 26800", genre:"Electronics", year:2022, tags:["battery","portable","charging"]},
+  {item_id:"p6", title:"Yoga Mat Premium Cork", genre:"Sports", year:2021, tags:["fitness","eco","non-slip"]},
+  {item_id:"p7", title:"Moleskine Classic Notebook", genre:"Stationery", year:2023, tags:["journaling","premium","writing"]},
+  {item_id:"p8", title:"AeroPress Coffee Maker", genre:"Kitchen", year:2020, tags:["coffee","portable","smooth"]},
+  {item_id:"p9", title:"Garmin Forerunner 255", genre:"Sports", year:2022, tags:["GPS","running","health"]},
+  {item_id:"p10", title:"Raspberry Pi 4 Model B", genre:"Electronics", year:2022, tags:["maker","programming","DIY"]},
+];
+
+const USER_PROFILES = {
+  alice:    {preferred_genres:["Drama","Sci-Fi"],    avg_rating:4.0},
+  bob:      {preferred_genres:["Action","Sci-Fi"],   avg_rating:3.5},
+  carol:    {preferred_genres:["Animation","Drama"], avg_rating:4.2},
+  dave:     {preferred_genres:["Crime","Thriller"],  avg_rating:3.8},
+  eve:      {preferred_genres:["Sci-Fi","Fantasy"],  avg_rating:4.5},
+  frank:    {preferred_genres:["Romance","Drama"],   avg_rating:3.2},
+  grace:    {preferred_genres:["Horror","Thriller"], avg_rating:3.9},
+  henry:    {preferred_genres:["Mystery","Crime"],   avg_rating:4.1},
+  isabella: {preferred_genres:["Animation","Romance"],avg_rating:4.3},
+  jack:     {preferred_genres:["Action","Adventure"],avg_rating:3.6},
+};
+
+// ── Simple JS matrix factorisation (SVD approximated via power iteration) ────
+
+function seededRandom(seed) {
+  let s = seed;
+  return () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0x100000000; };
+}
+
+function buildRatingMatrix(userId, items, dataset) {
+  // Simulate ratings for all users
+  const users = Object.keys(USER_PROFILES);
+  const n_users = users.length;
+  const n_items = items.length;
+  const R = Array.from({length: n_users}, () => new Array(n_items).fill(0));
+  
+  users.forEach((uid, ui) => {
+    const profile = USER_PROFILES[uid];
+    const rng = seededRandom(uid.charCodeAt(0) * 137 + ui * 31);
+    const preferred = new Set(profile.preferred_genres);
+    const sampleCount = Math.min(12, items.length);
+    
+    // Simple deterministic sample
+    const indices = items.map((_,i)=>i).sort(() => rng() - 0.5).slice(0, sampleCount);
+    
+    indices.forEach(ii => {
+      const item = items[ii];
+      let base = profile.avg_rating;
+      const boost = preferred.has(item.genre) ? rng() * 0.8 + 0.3 : rng() * 1.5 - 1.2;
+      let rating = Math.round((Math.min(5, Math.max(1, base + boost))) * 2) / 2;
+      R[ui][ii] = rating;
+    });
+  });
+
+  return { R, users, items };
+}
+
+function matrixMul(A, B) {
+  // A: m×k, B: k×n → m×n
+  const m = A.length, k = A[0].length, n = B[0].length;
+  const C = Array.from({length:m}, () => new Array(n).fill(0));
+  for (let i=0;i<m;i++) for (let j=0;j<n;j++) for (let l=0;l<k;l++) C[i][j]+=A[i][l]*B[l][j];
+  return C;
+}
+
+function simpleMF(R, n_factors=6, steps=50, lr=0.005, reg=0.02) {
+  const n_users = R.length, n_items = R[0].length;
+  const rng = seededRandom(42);
+  
+  // Init random factors
+  const P = Array.from({length:n_users}, () => Array.from({length:n_factors}, () => rng()*0.1));
+  const Q = Array.from({length:n_items}, () => Array.from({length:n_factors}, () => rng()*0.1));
+
+  // SGD
+  for (let step=0; step<steps; step++) {
+    for (let u=0; u<n_users; u++) {
+      for (let i=0; i<n_items; i++) {
+        if (R[u][i] === 0) continue;
+        let pred = 0;
+        for (let k=0; k<n_factors; k++) pred += P[u][k] * Q[i][k];
+        const err = R[u][i] - pred;
+        for (let k=0; k<n_factors; k++) {
+          const puk = P[u][k];
+          P[u][k] += lr * (err * Q[i][k] - reg * puk);
+          Q[i][k] += lr * (err * puk - reg * Q[i][k]);
+        }
+      }
+    }
+  }
+  return { P, Q };
+}
+
+function getCandidates(userId, items, dataset, topK=20) {
+  const { R, users } = buildRatingMatrix(userId, items, dataset);
+  const { P, Q } = simpleMF(R);
+  
+  const ui = users.indexOf(userId);
+  if (ui < 0) return [];
+  
+  const seen = new Set(R[ui].map((r,i) => r > 0 ? i : -1).filter(i => i >= 0));
+  
+  const scores = items.map((item, ii) => {
+    let score = 0;
+    for (let k=0; k<P[ui].length; k++) score += P[ui][k] * Q[ii][k];
+    return { item, score: Math.min(5, Math.max(1, score + 3.5)), seen: seen.has(ii) };
+  });
+
+  return scores
+    .filter(s => !s.seen)
+    .sort((a,b) => b.score - a.score)
+    .slice(0, topK)
+    .map(s => ({ ...s.item, predicted_rating: Math.round(s.score * 100) / 100 }));
+}
+
+function getUserHistory(userId, items, dataset) {
+  const { R, users } = buildRatingMatrix(userId, items, dataset);
+  const ui = users.indexOf(userId);
+  if (ui < 0) return [];
+  return items
+    .map((item, ii) => R[ui][ii] > 0 ? { ...item, rating: R[ui][ii] } : null)
+    .filter(Boolean)
+    .sort((a,b) => b.rating - a.rating);
+}
+
+// ── LLM Re-ranking via LOCAL backend (so keys aren’t exposed) ─────────────────
+
+const API_BASE = 'http://127.0.0.1:8000';
+
+async function apiJson(path, opts={}) {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    ...opts,
+  });
+  const text = await resp.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* ignore */ }
+  if (!resp.ok) {
+    const msg = (data && (data.detail || data.message)) ? (data.detail || data.message) : text;
+    throw new Error(`${resp.status}: ${msg || 'Request failed'}`);
+  }
+  return data;
+}
+
+async function ensureBackendReady() {
+  try {
+    const h = await fetch(`${API_BASE}/health`).then(r => r.json());
+    return h;
+  } catch (e) {
+    throw new Error(`Backend not reachable at ${API_BASE}. Start it with: python3 -m uvicorn server:app --host 127.0.0.1 --port 8000`);
+  }
+}
+
+async function llmRerank(candidates, history, context, userId, dataset) {
+  await ensureBackendReady();
+  return await apiJson('/rerank', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: userId,
+      dataset: dataset || 'movies',
+      candidates,
+      user_history: history,
+      user_context: context || null,
+      top_k: 10
+    }),
+  });
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.innerHTML = `⚠ ${msg}`;
+  box.style.display = 'block';
+}
+
+function clearError() {
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+function starsFor(rating) {
+  const full = Math.floor(rating);
+  const half = rating % 1 >= 0.5;
+  return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(5 - full - (half?1:0));
+}
+
+function renderHistory(history) {
+  const section = document.getElementById('historySection');
+  const row = document.getElementById('historyRow');
+  const count = document.getElementById('historyCount');
+  section.style.display = 'block';
+  count.textContent = `${history.length} rated`;
+  row.innerHTML = history.map(h => `
+    <div class="history-chip">
+      <span>${h.title}</span>
+      <span class="stars">${starsFor(h.rating)}</span>
+    </div>
+  `).join('');
+}
+
+function renderStage1(candidates) {
+  document.getElementById('stage1Count').textContent = `${candidates.length} items`;
+  document.getElementById('stage1Body').innerHTML = `
+    <div class="item-list">
+      ${candidates.slice(0,15).map((c, i) => `
+        <div class="item" data-id="${c.item_id}">
+          <div class="item-rank">#${i+1}</div>
+          <div class="item-info">
+            <div class="item-title">${c.title}</div>
+            <div class="item-meta">
+              <span class="tag genre">${c.genre}</span>
+              <span class="tag">${c.year}</span>
+              ${c.tags.slice(0,2).map(t=>`<span class="tag">${t}</span>`).join('')}
+            </div>
+          </div>
+          <div class="score-bar">
+            <div class="score-val">${c.predicted_rating.toFixed(2)}</div>
+            <div class="score-track"><div class="score-fill" style="width:${(c.predicted_rating/5)*100}%"></div></div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderStage2(result) {
+  const items = result.ranked_items;
+  document.getElementById('stage2Count').textContent = `Top ${items.length}`;
+  document.getElementById('stage2Body').innerHTML = `
+    <div class="item-list">
+      ${items.map((r, i) => `
+        <div class="item">
+          <div class="item-rank">#${r.rank || i+1}</div>
+          <div class="item-info">
+            <div class="item-title">${r.title}</div>
+            <div class="item-meta">
+              <span class="tag genre">${r.genre}</span>
+              <span class="tag">${r.year}</span>
+              ${(r.tags||[]).slice(0,2).map(t=>`<span class="tag">${t}</span>`).join('')}
+            </div>
+            ${r.reason ? `<div class="item-reason">💡 ${r.reason}</div>` : ''}
+          </div>
+          <div class="score-bar">
+            <div class="score-val">${r.score ? r.score.toFixed(2) : '—'}</div>
+            <div class="score-track"><div class="score-fill" style="width:${((r.score||0.5))*100}%"></div></div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    ${result.rerank_summary ? `
+      <div class="summary-box">
+        <div class="summary-label">🧠 Re-ranking Strategy</div>
+        <div class="summary-text">${result.rerank_summary}</div>
+      </div>
+    ` : ''}
+  `;
+}
+
+function setLoading(stage, msg) {
+  const body = document.getElementById(`stage${stage}Body`);
+  body.innerHTML = `<div class="loading"><div class="spinner"></div>${msg}</div>`;
+}
+
+// ── Main pipeline ─────────────────────────────────────────────────────────────
+
+async function runPipeline() {
+  clearError();
+  const userId = document.getElementById('userSelect').value;
+  const dataset = document.getElementById('datasetSelect').value;
+  const context = document.getElementById('contextInput').value.trim();
+  const items = dataset === 'products' ? PRODUCTS : MOVIES;
+
+  document.getElementById('runBtn').disabled = true;
+
+  try {
+    // History
+    const history = getUserHistory(userId, items, dataset);
+    renderHistory(history);
+
+    // Stage 1
+    setLoading(1, 'Running matrix factorisation…');
+    await new Promise(r => setTimeout(r, 200)); // let UI update
+    const candidates = getCandidates(userId, items, dataset, 20);
+    renderStage1(candidates);
+
+    // Stage 2
+    setLoading(2, 'Re-ranking candidates…');
+    const result = await llmRerank(candidates, history, context, userId, dataset);
+    renderStage2(result);
+
+  } catch(e) {
+    showError(e.message);
+    document.getElementById('stage2Body').innerHTML = '<div class="empty">Re-ranking failed</div>';
+  } finally {
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+async function runStage1Only() {
+  clearError();
+  const userId = document.getElementById('userSelect').value;
+  const dataset = document.getElementById('datasetSelect').value;
+  const items = dataset === 'products' ? PRODUCTS : MOVIES;
+
+  setLoading(1, 'Running matrix factorisation…');
+  document.getElementById('stage2Body').innerHTML = '<div class="empty">Run the full pipeline to see LLM re-ranking</div>';
+  document.getElementById('stage2Count').textContent = '—';
+
+  await new Promise(r => setTimeout(r, 100));
+  const history = getUserHistory(userId, items, dataset);
+  renderHistory(history);
+  const candidates = getCandidates(userId, items, dataset, 20);
+  renderStage1(candidates);
+}
+</script>
+</body>
+</html>
