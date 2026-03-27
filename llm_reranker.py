@@ -45,7 +45,7 @@ Do not include any text outside the JSON. Include ALL items from the input, just
 
 async def llm_rerank(
     candidates: List[dict],
-    user_history: List[dict],
+    user_history:List[dict],
     user_context: Optional[str] = None,
     top_k: int = 10,
     api_key: Optional[str] = None,
