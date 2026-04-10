@@ -1,26 +1,44 @@
 """
-FastAPI backend for the two-stage recommendation system.
-Endpoints:
-  GET  /users                        - list available users
-  GET  /recommend/{user_id}          - full two-stage pipeline
-  GET  /candidates/{user_id}         - Stage 1 only (MF candidates)
-  GET  /history/{user_id}            - user rating history
-  POST /rerank                        - Stage 2 only (re-rank given candidates)
+FastAPI backend — updated to use:
+  Stage 1 : Two-Tower Neural Retrieval  (two_tower.py)
+  Stage 2 : Neural MLP Re-ranker        (neural_reranker.py)
+  Data    : MovieLens-20M / 1M / 100K   (movielens_dataset.py)
+
+No Anthropic API key needed. Fully offline.
+
+Endpoints (same as before — frontend unchanged):
+  GET  /users
+  GET  /history/{user_id}
+  GET  /candidates/{user_id}
+  GET  /recommend/{user_id}
+  POST /rerank
+  GET  /health
+
+Startup behaviour:
+  - Checks for a saved model checkpoint in ./checkpoints/
+  - If found: loads it instantly (fast)
+  - If not found: trains from scratch and saves checkpoint
+
+Training time estimates:
+  synthetic  : ~10 seconds
+  ml-100k    : ~2 minutes
+  ml-1m      : ~10 minutes
+  ml-20m     : ~60 minutes (use sample_users=20000 to cap at ~15 minutes)
 """
 
 import os
+from pathlib import Path
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
 
-from dataset import load_dataset, get_user_ids
-from matrix_factorization import MatrixFactorizationRecommender
-from llm_reranker import llm_rerank
-from local_ltr_reranker import LearningToRankReranker
+from movielens_dataset import load_dataset, get_user_ids
+from two_tower import TwoTowerRetriever, train_two_tower
+from neural_reranker import NeuralReranker
 
-app = FastAPI(title="Two-Stage RecSys API", version="1.0")
+app = FastAPI(title="Two-Stage RecSys API — Neural Edition", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,183 +47,211 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Startup: train MF model ────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Globals (populated on startup)
+# ---------------------------------------------------------------------------
 
-mf_movie = MatrixFactorizationRecommender(n_factors=10)
-mf_product = MatrixFactorizationRecommender(n_factors=8)
-anthropic_api_key_override: Optional[str] = None
-ltr_movie: Optional[LearningToRankReranker] = None
-ltr_product: Optional[LearningToRankReranker] = None
+retriever: Optional[TwoTowerRetriever] = None
+reranker:  Optional[NeuralReranker]    = None
+_all_ratings: List[dict] = []
+_all_items:   List[dict] = []
+
+CHECKPOINT_DIR         = Path("./checkpoints")
+RETRIEVER_CHECKPOINT   = CHECKPOINT_DIR / "two_tower.pt"
+RERANKER_CHECKPOINT    = CHECKPOINT_DIR / "neural_reranker.pt"
+
+# ---------------------------------------------------------------------------
+# Dataset config — change these to switch datasets
+# ---------------------------------------------------------------------------
+
+DATASET_VARIANT  = "auto"     # "auto" | "ml-20m" | "ml-1m" | "ml-100k" | "synthetic"
+SAMPLE_USERS     = None       # Set to e.g. 20000 to cap ml-20m for faster training
+                               # None = use all users
+
+# Training epochs — reduce for faster startup, increase for better quality
+TWO_TOWER_EPOCHS = 30
+RERANKER_EPOCHS  = 10
+
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
 
 @app.on_event("startup")
 def startup():
-    ratings_m, items_m = load_dataset("movies")
-    mf_movie.fit(ratings_m, items_m)
-    global ltr_movie
-    ltr_movie = LearningToRankReranker.train_from_ratings(
-        ratings=ratings_m, items=items_m, mf=mf_movie
-    )
+    global retriever, reranker, _all_ratings, _all_items
 
-    ratings_p, items_p = load_dataset("products")
-    mf_product.fit(ratings_p, items_p)
-    global ltr_product
-    ltr_product = LearningToRankReranker.train_from_ratings(
-        ratings=ratings_p, items=items_p, mf=mf_product
-    )
-    print("✓ Both MF models ready.")
+    # ── Load data ─────────────────────────────────────────────────────────
+    print(f"\nLoading dataset (variant={DATASET_VARIANT!r})...")
+    _all_ratings, _all_items = load_dataset(DATASET_VARIANT, sample_users=SAMPLE_USERS)
+    print(f"  {len(_all_ratings):,} ratings | {len(_all_items):,} items | "
+          f"{len({r['user_id'] for r in _all_ratings}):,} users")
 
-def get_mf(dataset: str) -> MatrixFactorizationRecommender:
-    if dataset == "products":
-        return mf_product
-    return mf_movie
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── Two-Tower Retriever ───────────────────────────────────────────────
+    if RETRIEVER_CHECKPOINT.exists():
+        print(f"\nLoading two-tower retriever from checkpoint...")
+        retriever = TwoTowerRetriever.load(str(RETRIEVER_CHECKPOINT), _all_ratings)
+    else:
+        print(f"\nTraining two-tower retriever (epochs={TWO_TOWER_EPOCHS})...")
+        retriever = train_two_tower(
+            ratings  = _all_ratings,
+            items    = _all_items,
+            epochs   = TWO_TOWER_EPOCHS,
+        )
+        retriever.save(str(RETRIEVER_CHECKPOINT))
+
+    # ── Neural Re-ranker ──────────────────────────────────────────────────
+    if RERANKER_CHECKPOINT.exists():
+        print(f"\nLoading neural re-ranker from checkpoint...")
+        reranker = NeuralReranker.load(str(RERANKER_CHECKPOINT))
+    else:
+        print(f"\nTraining neural re-ranker (epochs={RERANKER_EPOCHS})...")
+        reranker = NeuralReranker.train(
+            ratings = _all_ratings,
+            items   = _all_items,
+            epochs  = RERANKER_EPOCHS,
+        )
+        reranker.save(str(RERANKER_CHECKPOINT))
+
+    print("\n✓ Server ready.\n")
 
 
-def get_ltr(dataset: str) -> LearningToRankReranker:
-    reranker = ltr_product if dataset == "products" else ltr_movie
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+def _get_retriever() -> TwoTowerRetriever:
+    if retriever is None:
+        raise HTTPException(503, "Retriever not ready yet — server is still starting up.")
+    return retriever
+
+
+def _get_reranker() -> NeuralReranker:
     if reranker is None:
-        raise HTTPException(500, "LTR reranker not initialised yet")
+        raise HTTPException(503, "Re-ranker not ready yet — server is still starting up.")
     return reranker
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
-class AnthropicKeyRequest(BaseModel):
-    api_key: str
-
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health():
-    configured = bool(anthropic_api_key_override) or bool(os.environ.get("ANTHROPIC_API_KEY"))
-    return {"ok": True, "anthropic_configured": configured}
-
-
-@app.post("/config/anthropic_key")
-def set_anthropic_key(req: AnthropicKeyRequest):
-    """
-    Store ANTHROPIC key in-memory for this server process only.
-    This avoids needing terminal exports and keeps the key off the browser-to-Anthropic path.
-    """
-    global anthropic_api_key_override
-    key = (req.api_key or "").strip()
-    if not key:
-        raise HTTPException(400, "api_key is required")
-    anthropic_api_key_override = key
-    return {"ok": True, "anthropic_configured": True}
+    return {
+        "ok"              : True,
+        "retriever_ready" : retriever is not None,
+        "reranker_ready"  : reranker is not None,
+        "n_ratings"       : len(_all_ratings),
+        "n_items"         : len(_all_items),
+        "pipeline"        : "two_tower → neural_reranker",
+    }
 
 
 @app.get("/users")
 def list_users():
-    return {"users": get_user_ids()}
+    return {"users": get_user_ids(_all_ratings)}
 
 
 @app.get("/history/{user_id}")
-def user_history(
-    user_id: str,
-    dataset: str = Query("movies", enum=["movies", "products"]),
-):
-    mf = get_mf(dataset)
-    history = mf.get_user_history(user_id)
+def user_history(user_id: str):
+    r = _get_retriever()
+    history = r.get_user_history(user_id)
     if not history:
-        raise HTTPException(404, f"User '{user_id}' not found or has no history")
+        raise HTTPException(404, f"User '{user_id}' not found or has no history.")
     return {"user_id": user_id, "history": history}
 
 
 @app.get("/candidates/{user_id}")
 def stage1_candidates(
     user_id: str,
-    top_k: int = Query(20, ge=5, le=50),
-    dataset: str = Query("movies", enum=["movies", "products"]),
+    top_k: int = Query(20, ge=5, le=100),
 ):
-    """Stage 1: collaborative filtering candidates."""
-    mf = get_mf(dataset)
-    candidates = mf.get_candidates(user_id, top_k=top_k)
+    """Stage 1: Two-Tower retrieval candidates."""
+    r          = _get_retriever()
+    candidates = r.get_candidates(user_id, top_k=top_k)
     return {
-        "user_id": user_id,
-        "stage": "1_collaborative_filtering",
+        "user_id"     : user_id,
+        "stage"       : "1_two_tower_retrieval",
         "n_candidates": len(candidates),
-        "candidates": candidates,
+        "candidates"  : candidates,
     }
 
 
 class RerankRequest(BaseModel):
-    user_id: str
-    candidates: List[dict]
+    user_id     : str
+    candidates  : List[dict]
     user_history: List[dict]
     user_context: Optional[str] = None
-    top_k: int = 10
-    dataset: str = "movies"
+    top_k       : int = 10
+    lambda_mmr  : float = 0.7
 
 
 @app.post("/rerank")
-async def stage2_rerank(req: RerankRequest):
-    """Stage 2: LTR model by default, Claude optional."""
-    if anthropic_api_key_override or os.environ.get("ANTHROPIC_API_KEY"):
-        result = await llm_rerank(
-            candidates=req.candidates,
-            user_history=req.user_history,
-            user_context=req.user_context,
-            top_k=req.top_k,
-            api_key=anthropic_api_key_override,
-        )
-        return {"user_id": req.user_id, "stage": "2_llm_reranking", **result}
-
-    ltr = get_ltr(req.dataset)
-    result = ltr.rerank(
-        candidates=req.candidates,
-        user_history=req.user_history,
-        user_context=req.user_context,
-        top_k=req.top_k,
+def stage2_rerank(req: RerankRequest):
+    """Stage 2: Neural MLP re-ranking with MMR diversity."""
+    rr     = _get_reranker()
+    result = rr.rerank(
+        candidates   = req.candidates,
+        user_history = req.user_history,
+        user_context = req.user_context,
+        top_k        = req.top_k,
+        lambda_mmr   = req.lambda_mmr,
     )
-    return {"user_id": req.user_id, "stage": "2_ltr_reranking", **result}
+    return {"user_id": req.user_id, "stage": "2_neural_reranking", **result}
 
 
 @app.get("/recommend/{user_id}")
-async def full_pipeline(
-    user_id: str,
-    top_k: int = Query(10, ge=3, le=20),
-    candidates_k: int = Query(20, ge=10, le=50),
+def full_pipeline(
+    user_id     : str,
+    top_k       : int   = Query(10, ge=3, le=20),
+    candidates_k: int   = Query(20, ge=10, le=100),
     user_context: Optional[str] = Query(None),
-    dataset: str = Query("movies", enum=["movies", "products"]),
+    lambda_mmr  : float = Query(0.7, ge=0.0, le=1.0),
 ):
-    """Full two-stage pipeline: MF → (LTR by default, Claude optional)."""
-    mf = get_mf(dataset)
+    """
+    Full two-stage pipeline: Two-Tower retrieval → Neural MLP re-ranking.
 
-    # Stage 1
-    candidates = mf.get_candidates(user_id, top_k=candidates_k)
-    history = mf.get_user_history(user_id)
+    Args:
+        user_id     : User ID (e.g. 'u1', 'alice')
+        top_k       : Final number of recommendations to return
+        candidates_k: How many candidates Stage 1 retrieves
+        user_context: Free-text mood/context — e.g. "I want something dark and gritty"
+        lambda_mmr  : Diversity (0.0 = max diversity, 1.0 = max relevance)
 
-    # Stage 2
-    if anthropic_api_key_override or os.environ.get("ANTHROPIC_API_KEY"):
-        result = await llm_rerank(
-            candidates=candidates,
-            user_history=history,
-            user_context=user_context,
-            top_k=top_k,
-            api_key=anthropic_api_key_override,
-        )
-        pipeline = "matrix_factorization → llm_reranking"
-    else:
-        ltr = get_ltr(dataset)
-        result = ltr.rerank(
-            candidates=candidates,
-            user_history=history,
-            user_context=user_context,
-            top_k=top_k,
-        )
-        pipeline = "matrix_factorization → ltr_reranking"
+    Example:
+        GET /recommend/u1?user_context=criminal+movies&top_k=10
+    """
+    r = _get_retriever()
+    rr = _get_reranker()
+
+    # Stage 1 — two-tower retrieval
+    candidates = r.get_candidates(user_id, top_k=candidates_k)
+    history    = r.get_user_history(user_id)
+
+    # Stage 2 — neural re-ranking
+    result = rr.rerank(
+        candidates   = candidates,
+        user_history = history,
+        user_context = user_context,
+        top_k        = top_k,
+        lambda_mmr   = lambda_mmr,
+    )
 
     return {
-        "user_id": user_id,
-        "dataset": dataset,
-        "pipeline": pipeline,
+        "user_id"          : user_id,
+        "pipeline"         : "two_tower_retrieval → neural_mlp_reranking",
         "stage1_candidates": len(candidates),
-        "stage2_top_k": top_k,
-        "user_context": user_context,
-        "rerank_summary": result.get("rerank_summary"),
-        "recommendations": result.get("ranked_items", []),
+        "stage2_top_k"     : top_k,
+        "user_context"     : user_context,
+        "lambda_mmr"       : lambda_mmr,
+        "rerank_summary"   : result.get("rerank_summary"),
+        "recommendations"  : result.get("ranked_items", []),
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
