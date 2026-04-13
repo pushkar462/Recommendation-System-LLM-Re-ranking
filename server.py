@@ -64,8 +64,8 @@ RERANKER_CHECKPOINT    = CHECKPOINT_DIR / "neural_reranker.pt"
 # Dataset config — change these to switch datasets
 # ---------------------------------------------------------------------------
 
-DATASET_VARIANT  = "auto"     # "auto" | "ml-20m" | "ml-1m" | "ml-100k" | "synthetic"
-SAMPLE_USERS     = None       # Set to e.g. 20000 to cap ml-20m for faster training
+DATASET_VARIANT = "ml-100k"   # was "auto" which picks ml-1m (much larger)
+SAMPLE_USERS    = 500          # cap users loaded into memory     
                                # None = use all users
 
 # Training epochs — reduce for faster startup, increase for better quality
