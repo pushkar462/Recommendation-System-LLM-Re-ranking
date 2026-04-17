@@ -1,6 +1,14 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# Free tier (~512Mi): ml-1m OOMs — use synthetic + keyword rerank + fewer epochs.
-# For real MovieLens: upgrade to Starter+ and set DATASET_VARIANT=ml-1m, SAMPLE_USERS=300.
+#
+# Free tier (~512 MB RAM):
+#   - DATASET_VARIANT=synthetic  → tiny built-in dataset, zero downloads
+#   - RERANKER_USE_KEYWORDS_ONLY=1 → skip loading sentence-transformers (~80 MB)
+#   - Fewer training epochs to stay within startup timeout
+#
+# To use real MovieLens on a paid plan (Starter+, 2 GB RAM):
+#   DATASET_VARIANT=ml-100k  (auto-downloads ~5 MB at startup)
+#   DATASET_VARIANT=ml-1m    (must ship data in image or mount a disk)
+#   SAMPLE_USERS=300         (caps users sampled for training)
 
 services:
   - type: web
@@ -13,11 +21,16 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      # ── Dataset ────────────────────────────────────────────────────────────
       - key: DATASET_VARIANT
-        value: "synthetic"
+        value: "synthetic"          # safe for 512 MB; change to ml-100k on paid
+      - key: SAMPLE_USERS
+        value: "none"               # synthetic has only 15 users; "none" = use all
+      # ── Memory savers ──────────────────────────────────────────────────────
       - key: RERANKER_USE_KEYWORDS_ONLY
-        value: "1"
+        value: "1"                  # skip sentence-transformers (saves ~80–120 MB)
+      # ── Training epochs ────────────────────────────────────────────────────
       - key: TWO_TOWER_EPOCHS
-        value: "8"
+        value: "5"
       - key: RERANKER_EPOCHS
         value: "2"

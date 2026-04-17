@@ -78,8 +78,11 @@ def _sample_users_from_env() -> Optional[int]:
     return int(s)
 
 
-DATASET_VARIANT = (os.environ.get("DATASET_VARIANT") or "ml-1m").strip() or "ml-1m"
-SAMPLE_USERS    = _sample_users_from_env()  # None = use all users (heavy)
+# Dataset config — change via env vars DATASET_VARIANT and SAMPLE_USERS.
+# Default is "synthetic" (safe for any memory tier).
+# For Render paid plans: set DATASET_VARIANT=ml-100k (auto-downloads) or ml-1m.
+DATASET_VARIANT = (os.environ.get("DATASET_VARIANT") or "synthetic").strip() or "synthetic"
+SAMPLE_USERS    = _sample_users_from_env()  # None = use all users
 
 CHECKPOINT_DIR = Path("./checkpoints")
 
@@ -217,8 +220,8 @@ def _env_int_simple(name: str, default: int) -> int:
     return int(str(raw).strip())
 
 
-TWO_TOWER_EPOCHS = _env_int_simple("TWO_TOWER_EPOCHS", 15)
-RERANKER_EPOCHS  = _env_int_simple("RERANKER_EPOCHS", 3)
+TWO_TOWER_EPOCHS = _env_int_simple("TWO_TOWER_EPOCHS", 5)
+RERANKER_EPOCHS  = _env_int_simple("RERANKER_EPOCHS", 2)
 
 
 # ---------------------------------------------------------------------------

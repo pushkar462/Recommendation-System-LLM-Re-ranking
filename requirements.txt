@@ -1,13 +1,11 @@
-# Core ML
-# With this (CPU-only, ~200MB):
+# Core ML — CPU-only PyTorch (saves ~700 MB vs full torch)
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.0
 numpy>=1.24
-scipy>=1.11
 
 # Neural re-ranker context encoding
-# Provides sentence-transformers (all-MiniLM-L6-v2)
-# Falls back gracefully to keyword scoring if not installed
+# sentence-transformers loads ~80 MB model; guarded by RERANKER_USE_KEYWORDS_ONLY=1
+# on Render free tier. Keep installed so paid tiers can use it.
 sentence-transformers>=2.2
 
 # API server
@@ -15,10 +13,6 @@ fastapi>=0.110
 uvicorn>=0.29
 httpx>=0.27
 pydantic>=2.0
-
-# Optional: kept for backward compatibility with old llm_reranker / ltr paths
-lightgbm>=4.0
-scikit-learn>=1.4
 
 # Utilities
 tqdm>=4.0
