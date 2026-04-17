@@ -803,6 +803,13 @@ async function llmRerank(candidates, history, context, userId, dataset) {
   });
 }
 
+function setUserOptions(userIds) {
+  const sel = document.getElementById('userSelect');
+  const current = sel.value;
+  sel.innerHTML = userIds.map(u => `<option value="${u}">${u}</option>`).join('');
+  if (userIds.includes(current)) sel.value = current;
+}
+
 // ── UI helpers ────────────────────────────────────────────────────────────────
 
 function showError(msg) {
@@ -910,20 +917,46 @@ async function runPipeline() {
   document.getElementById('runBtn').disabled = true;
 
   try {
-    // History
-    const history = getUserHistory(userId, items, dataset);
-    renderHistory(history);
+    if (dataset === 'movies') {
+      // Prefer backend for real MovieLens data + trained models (varied outputs).
+      await ensureBackendReady();
 
-    // Stage 1
-    setLoading(1, 'Running matrix factorisation…');
-    await new Promise(r => setTimeout(r, 200)); // let UI update
-    const candidates = getCandidates(userId, items, dataset, 20);
-    renderStage1(candidates);
+      setLoading(1, 'Fetching Stage 1 candidates…');
+      setLoading(2, 'Running Stage 2 re-ranking…');
 
-    // Stage 2
-    setLoading(2, 'Re-ranking candidates…');
-    const result = await llmRerank(candidates, history, context, userId, dataset);
-    renderStage2(result);
+      const histResp = await apiJson(`/history/${encodeURIComponent(userId)}`);
+      const history = histResp.history || [];
+      renderHistory(history);
+
+      const candResp = await apiJson(`/candidates/${encodeURIComponent(userId)}?top_k=20`);
+      const candidates = candResp.candidates || [];
+      renderStage1(candidates);
+
+      const qs = new URLSearchParams({
+        top_k: '10',
+        candidates_k: '60',
+        lambda_mmr: '0.7',
+      });
+      if (context) qs.set('user_context', context);
+      const rec = await apiJson(`/recommend/${encodeURIComponent(userId)}?${qs.toString()}`);
+      renderStage2({
+        ranked_items: rec.recommendations || [],
+        rerank_summary: rec.rerank_summary || rec.pipeline || '',
+      });
+    } else {
+      // Offline demo mode for products (client-side MF + backend rerank)
+      const history = getUserHistory(userId, items, dataset);
+      renderHistory(history);
+
+      setLoading(1, 'Running matrix factorisation…');
+      await new Promise(r => setTimeout(r, 200)); // let UI update
+      const candidates = getCandidates(userId, items, dataset, 20);
+      renderStage1(candidates);
+
+      setLoading(2, 'Re-ranking candidates…');
+      const result = await llmRerank(candidates, history, context, userId, dataset);
+      renderStage2(result);
+    }
 
   } catch(e) {
     showError(e.message);
@@ -939,16 +972,35 @@ async function runStage1Only() {
   const dataset = document.getElementById('datasetSelect').value;
   const items = dataset === 'products' ? PRODUCTS : MOVIES;
 
-  setLoading(1, 'Running matrix factorisation…');
+  setLoading(1, dataset === 'movies' ? 'Fetching Stage 1 candidates…' : 'Running matrix factorisation…');
   document.getElementById('stage2Body').innerHTML = '<div class="empty">Run the full pipeline to see LLM re-ranking</div>';
   document.getElementById('stage2Count').textContent = '—';
 
   await new Promise(r => setTimeout(r, 100));
-  const history = getUserHistory(userId, items, dataset);
-  renderHistory(history);
-  const candidates = getCandidates(userId, items, dataset, 20);
-  renderStage1(candidates);
+  if (dataset === 'movies') {
+    await ensureBackendReady();
+    const histResp = await apiJson(`/history/${encodeURIComponent(userId)}`);
+    renderHistory(histResp.history || []);
+    const candResp = await apiJson(`/candidates/${encodeURIComponent(userId)}?top_k=20`);
+    renderStage1(candResp.candidates || []);
+  } else {
+    const history = getUserHistory(userId, items, dataset);
+    renderHistory(history);
+    const candidates = getCandidates(userId, items, dataset, 20);
+    renderStage1(candidates);
+  }
 }
+
+// Try to populate user list from backend when available.
+window.addEventListener('load', async () => {
+  try {
+    await ensureBackendReady();
+    const u = await apiJson('/users');
+    if (u && Array.isArray(u.users) && u.users.length) setUserOptions(u.users);
+  } catch {
+    // Offline/static options remain.
+  }
+});
 </script>
 </body>
 </html>
