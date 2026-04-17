@@ -7,5 +7,5 @@ venv/
 .env
 
 # Local artifacts
-checkpoints/
+# checkpoints/ — pre-trained models tracked for instant Render cold-starts
 # data/ml-100k/ — tracked intentionally (bundled in Docker for Render)
