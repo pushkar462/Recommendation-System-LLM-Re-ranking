@@ -1,14 +1,9 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 #
-# Free tier (~512 MB RAM):
-#   - DATASET_VARIANT=synthetic  → tiny built-in dataset, zero downloads
-#   - RERANKER_USE_KEYWORDS_ONLY=1 → skip loading sentence-transformers (~80 MB)
-#   - Fewer training epochs to stay within startup timeout
-#
-# To use real MovieLens on a paid plan (Starter+, 2 GB RAM):
-#   DATASET_VARIANT=ml-100k  (auto-downloads ~5 MB at startup)
-#   DATASET_VARIANT=ml-1m    (must ship data in image or mount a disk)
-#   SAMPLE_USERS=300         (caps users sampled for training)
+# Free tier (~512 MB RAM) — ml-100k bundled in Docker image (15 MB).
+# SAMPLE_USERS=150 caps training to ~15K ratings so RAM stays under 512 MB.
+# RERANKER_USE_KEYWORDS_ONLY=1 skips sentence-transformers (~80 MB savings).
+# Result: proper genre reranking with 1,682 real movies on the free plan.
 
 services:
   - type: web
@@ -21,15 +16,15 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
-      # ── Dataset ────────────────────────────────────────────────────────────
+      # ── Dataset (ml-100k is bundled in the Docker image — no download needed)
       - key: DATASET_VARIANT
-        value: "synthetic"          # safe for 512 MB; change to ml-100k on paid
+        value: "ml-100k"
       - key: SAMPLE_USERS
-        value: "none"               # synthetic has only 15 users; "none" = use all
-      # ── Memory savers ──────────────────────────────────────────────────────
+        value: "150"           # ~15K ratings — fits comfortably in 512 MB RAM
+      # ── Memory savers ───────────────────────────────────────────────────────
       - key: RERANKER_USE_KEYWORDS_ONLY
-        value: "1"                  # skip sentence-transformers (saves ~80–120 MB)
-      # ── Training epochs ────────────────────────────────────────────────────
+        value: "1"             # skip sentence-transformers (saves ~80 MB)
+      # ── Training epochs ─────────────────────────────────────────────────────
       - key: TWO_TOWER_EPOCHS
         value: "5"
       - key: RERANKER_EPOCHS

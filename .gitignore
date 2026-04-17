@@ -8,4 +8,4 @@ venv/
 
 # Local artifacts
 checkpoints/
-data/ml-100k/
+# data/ml-100k/ — tracked intentionally (bundled in Docker for Render)
