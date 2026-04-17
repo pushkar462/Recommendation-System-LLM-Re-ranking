@@ -28,6 +28,7 @@ Training time estimates:
 
 import os
 import re
+import threading
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -62,6 +63,7 @@ _all_ratings: List[dict] = []
 _all_items:   List[dict] = []
 _item_popularity: dict = {}
 _items_by_id: dict = {}
+_startup_done: bool = False   # True once training is complete
 
 # ---------------------------------------------------------------------------
 # Dataset config — change these to switch datasets
@@ -71,7 +73,7 @@ _items_by_id: dict = {}
 def _sample_users_from_env() -> Optional[int]:
     raw = os.environ.get("SAMPLE_USERS")
     if raw is None or str(raw).strip() == "":
-        return 500
+        return 150   # safe default for Render free tier (512 MB RAM)
     s = str(raw).strip().lower()
     if s in ("all", "none", "0"):
         return None
@@ -228,9 +230,13 @@ RERANKER_EPOCHS  = _env_int_simple("RERANKER_EPOCHS", 2)
 # Startup
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
-def startup():
-    global retriever, reranker, _all_ratings, _all_items, _item_popularity, _items_by_id
+def _do_training():
+    """Run dataset load + model training in a background thread.
+    The HTTP server is already bound to the port before this runs,
+    so Render's port-scan succeeds immediately. Endpoints return 503
+    until _startup_done is True.
+    """
+    global retriever, reranker, _all_ratings, _all_items, _item_popularity, _items_by_id, _startup_done
 
     # ── Load data ─────────────────────────────────────────────────────────
     # On Render, MovieLens files won't exist unless we download them at runtime.
@@ -318,6 +324,13 @@ def startup():
     print("\n✓ Server ready.\n")
 
 
+@app.on_event("startup")
+def startup():
+    """Bind port immediately; launch training in background thread."""
+    t = threading.Thread(target=_do_training, daemon=True)
+    t.start()
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -340,13 +353,19 @@ def _get_reranker() -> NeuralReranker:
 
 @app.get("/health")
 def health():
+    """
+    Always returns 200 (port must be open for Render).
+    Check 'startup_done' to see if training is complete.
+    """
     return {
-        "ok"              : True,
+        "ok"              : _startup_done,
+        "startup_done"    : _startup_done,
         "retriever_ready" : retriever is not None,
         "reranker_ready"  : reranker is not None,
         "n_ratings"       : len(_all_ratings),
         "n_items"         : len(_all_items),
         "pipeline"        : "two_tower → neural_reranker",
+        "status"          : "ready" if _startup_done else "training — please wait",
     }
 
 
