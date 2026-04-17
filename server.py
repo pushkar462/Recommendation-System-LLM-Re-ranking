@@ -81,7 +81,7 @@ def _sample_users_from_env() -> Optional[int]:
 # Dataset config — change via env vars DATASET_VARIANT and SAMPLE_USERS.
 # Default is "synthetic" (safe for any memory tier).
 # For Render paid plans: set DATASET_VARIANT=ml-100k (auto-downloads) or ml-1m.
-DATASET_VARIANT = (os.environ.get("DATASET_VARIANT") or "synthetic").strip() or "synthetic"
+DATASET_VARIANT = (os.environ.get("DATASET_VARIANT") or "ml-100k").strip() or "ml-100k"
 SAMPLE_USERS    = _sample_users_from_env()  # None = use all users
 
 CHECKPOINT_DIR = Path("./checkpoints")

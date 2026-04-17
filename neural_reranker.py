@@ -569,15 +569,13 @@ class NeuralReranker:
         """
         Re-rank candidates.
 
-        Args:
-            candidates   : Stage 1 output (two-tower or SVD candidates)
-            user_history : User's rated items
-            user_context : Free-text context e.g. "I want something dark and gritty"
-            top_k        : Number of final results
-            lambda_mmr   : Diversity control (0.7 = balanced, 1.0 = pure relevance)
+        When user_context contains an explicit genre keyword (e.g. "crime",
+        "animation", "horror"), the top results are ALL from that genre — hard
+        partition, not just a soft boost.  Non-genre items only fill remaining
+        slots if there aren't enough genre items in the candidate pool.
 
-        Returns:
-            dict with "ranked_items" and "rerank_summary"
+        When no genre intent is detected, falls back to standard neural MLP +
+        MMR diversity re-ranking.
         """
         if not candidates:
             return {"ranked_items": [], "rerank_summary": "No candidates."}
@@ -597,46 +595,102 @@ class NeuralReranker:
 
         # Blend in explicit context similarity so the prompt reliably influences rank.
         if user_context:
-            scores_ctx = np.array([context_score(user_context, c) for c in candidates], dtype=np.float32)
-            # Model outputs are already (0..1). Context is (0..1). Blend them.
+            scores_ctx = np.array(
+                [context_score(user_context, c) for c in candidates],
+                dtype=np.float32,
+            )
             scores = 0.55 * scores_model + 0.45 * scores_ctx
         else:
             scores = scores_model
 
-        # Strong generic boost when a user explicitly asks for a genre.
-        # This avoids "horror" prompts returning mostly non-horror at the top.
+        # ── Hard genre-first partition ─────────────────────────────────────────
+        # When the user explicitly asks for a genre (e.g. "crime", "animation"),
+        # ALL top-k results must be that genre.  Intent-genre items are sorted by
+        # score, then non-intent items fill any remaining slots.
         if intent_set:
-            genres = np.array([(c.get("genre") or "").lower() for c in candidates], dtype=object)
-            is_intent = np.array([g in intent_set for g in genres], dtype=np.float32)
-            # Boost intent-genre items, and lightly demote others.
-            scores = scores + 0.85 * is_intent - 0.10 * (1.0 - is_intent)
+            genre_labels = np.array(
+                [(c.get("genre") or "").lower() for c in candidates], dtype=object
+            )
+            is_intent_mask = np.array(
+                [g in intent_set for g in genre_labels], dtype=bool
+            )
 
-            # When intent is present, bias towards relevance (less diversity penalty).
-            lambda_mmr = max(lambda_mmr, 0.85)
+            intent_indices     = np.where(is_intent_mask)[0]
+            non_intent_indices = np.where(~is_intent_mask)[0]
 
-        # Rank-normalise scores for stable 0..1 UI display
+            # Sort each bucket by score descending
+            if len(intent_indices):
+                intent_sorted = intent_indices[np.argsort(-scores[intent_indices])]
+            else:
+                intent_sorted = intent_indices
+
+            if len(non_intent_indices):
+                non_intent_sorted = non_intent_indices[
+                    np.argsort(-scores[non_intent_indices])
+                ]
+            else:
+                non_intent_sorted = non_intent_indices
+
+            # Final order: intent genre first, then fill with non-intent
+            final_order = np.concatenate([intent_sorted, non_intent_sorted])[:top_k]
+
+            # UI scores: intent items map to 0.5-1.0, non-intent to 0.0-0.5
+            scores_ui = np.zeros(len(candidates), dtype=np.float32)
+            if len(intent_sorted):
+                raw_i = scores[intent_sorted]
+                lo, hi = raw_i.min(), raw_i.max()
+                denom = (hi - lo) if (hi - lo) > 1e-6 else 1.0
+                scores_ui[intent_sorted] = 0.5 + 0.5 * (raw_i - lo) / denom
+            if len(non_intent_sorted):
+                raw_n = scores[non_intent_sorted]
+                lo, hi = raw_n.min(), raw_n.max()
+                denom = (hi - lo) if (hi - lo) > 1e-6 else 1.0
+                scores_ui[non_intent_sorted] = 0.0 + 0.5 * (raw_n - lo) / denom
+
+            ranked_items = []
+            for pos, idx in enumerate(final_order):
+                item = candidates[idx]
+                s = float(scores_ui[idx])
+                ranked_items.append(
+                    {
+                        **item,
+                        "rank": pos + 1,
+                        "score": s,
+                        "reason": self._generate_reason(item, user_history, s),
+                    }
+                )
+
+            genre_label = " / ".join(sorted(intent_set)).title()
+            summary = (
+                f"Re-ranked {len(candidates)} candidates. "
+                f"Context \'{user_context}\' → showing {genre_label} titles first "
+                f"(found {len(intent_sorted)} {genre_label} item(s) in candidate pool)."
+            )
+            return {"ranked_items": ranked_items, "rerank_summary": summary}
+
+        # ── No explicit genre intent — standard neural MLP + MMR re-rank ──────
         if scores.max() - scores.min() > 1e-6:
             scores_ui = (scores - scores.min()) / (scores.max() - scores.min())
         else:
             scores_ui = np.full_like(scores, 0.5)
 
-        # Sort by raw score first
-        order      = np.argsort(-scores)
+        order = np.argsort(-scores)
         candidates = [candidates[i] for i in order]
-        scores_ui  = scores_ui[order]
+        scores_ui = scores_ui[order]
 
-        # MMR diversity pass
         ranked_idx, ranked_mmr = self._mmr(
             candidates,
             scores_ui,
             top_k=top_k,
             lambda_mmr=lambda_mmr,
-            intent_genres=intent_set if intent_set else None,
+            intent_genres=None,
         )
 
-        # Normalise the *final* MMR scores for the UI so score == ordering signal.
         if ranked_mmr.size and float(ranked_mmr.max() - ranked_mmr.min()) > 1e-6:
-            ranked_score_ui = (ranked_mmr - ranked_mmr.min()) / (ranked_mmr.max() - ranked_mmr.min())
+            ranked_score_ui = (
+                (ranked_mmr - ranked_mmr.min())
+                / (ranked_mmr.max() - ranked_mmr.min())
+            )
         else:
             ranked_score_ui = np.full_like(ranked_mmr, 0.5, dtype=np.float32)
 
@@ -644,21 +698,22 @@ class NeuralReranker:
         for pos, idx in enumerate(ranked_idx):
             item = candidates[idx]
             s = float(ranked_score_ui[pos]) if pos < len(ranked_score_ui) else 0.5
-            ranked_items.append({
-                **item,
-                "rank"  : pos + 1,
-                # Keep full precision; UI can format. Rounding here can collapse
-                # small but meaningful differences into 0.00.
-                "score" : s,
-                "reason": self._generate_reason(item, user_history, s),
-            })
+            ranked_items.append(
+                {
+                    **item,
+                    "rank": pos + 1,
+                    "score": s,
+                    "reason": self._generate_reason(item, user_history, s),
+                }
+            )
 
         summary = (
             f"Re-ranked {len(candidates)} candidates using neural MLP + "
-            f"{'sentence-transformers' if _SBERT_AVAILABLE else 'keyword'} context scoring + MMR diversity."
+            f"{'sentence-transformers' if _SBERT_AVAILABLE else 'keyword'} context "
+            f"scoring + MMR diversity."
         )
         if user_context:
-            summary += f" Context: '{user_context}'."
+            summary += f" Context: \'{user_context}\'."
 
         return {"ranked_items": ranked_items, "rerank_summary": summary}
 
