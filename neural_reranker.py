@@ -51,6 +51,11 @@ except ImportError:
     print("sentence-transformers not found. Install with: pip install sentence-transformers")
     print("Falling back to keyword-based context scoring.")
 
+# Render free tier (~512Mi): set RERANKER_USE_KEYWORDS_ONLY=1 to skip loading SBERT
+if os.environ.get("RERANKER_USE_KEYWORDS_ONLY", "").lower() in ("1", "true", "yes"):
+    _SBERT_AVAILABLE = False
+    print("RERANKER_USE_KEYWORDS_ONLY=1 — keyword context scoring only (saves RAM).")
+
 
 SBERT_MODEL_NAME = "all-MiniLM-L6-v2"   # 80 MB, fast, good quality
 

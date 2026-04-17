@@ -209,9 +209,16 @@ def _ckpt_suffix() -> str:
 RETRIEVER_CHECKPOINT = CHECKPOINT_DIR / f"two_tower__{_ckpt_suffix()}.pt"
 RERANKER_CHECKPOINT  = CHECKPOINT_DIR / f"neural_reranker__{_ckpt_suffix()}.pt"
 
-# Training epochs — reduce for faster startup, increase for better quality
-TWO_TOWER_EPOCHS = 15
-RERANKER_EPOCHS  = 3
+# Training epochs — override with TWO_TOWER_EPOCHS / RERANKER_EPOCHS (e.g. Render free tier)
+def _env_int_simple(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return int(str(raw).strip())
+
+
+TWO_TOWER_EPOCHS = _env_int_simple("TWO_TOWER_EPOCHS", 15)
+RERANKER_EPOCHS  = _env_int_simple("RERANKER_EPOCHS", 3)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# Connect repo: New → Blueprint → select this repo.
-# Or: Web Service → Docker → same Dockerfile.
+# Free tier (~512Mi): ml-1m OOMs — use synthetic + keyword rerank + fewer epochs.
+# For real MovieLens: upgrade to Starter+ and set DATASET_VARIANT=ml-1m, SAMPLE_USERS=300.
 
 services:
   - type: web
@@ -13,6 +13,11 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
-      # Smaller sample = faster cold start & less RAM on free tier (optional).
-      - key: SAMPLE_USERS
-        value: "300"
+      - key: DATASET_VARIANT
+        value: "synthetic"
+      - key: RERANKER_USE_KEYWORDS_ONLY
+        value: "1"
+      - key: TWO_TOWER_EPOCHS
+        value: "8"
+      - key: RERANKER_EPOCHS
+        value: "2"
