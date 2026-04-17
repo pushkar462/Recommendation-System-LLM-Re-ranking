@@ -32,6 +32,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from movielens_dataset import load_dataset, get_user_ids
@@ -46,6 +47,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+DEMO_HTML_PATH = Path(__file__).parent / "demo.html"
 
 # ---------------------------------------------------------------------------
 # Globals (populated on startup)
@@ -181,6 +184,14 @@ def health():
         "n_items"         : len(_all_items),
         "pipeline"        : "two_tower → neural_reranker",
     }
+
+
+@app.get("/")
+def root():
+    if not DEMO_HTML_PATH.exists():
+        raise HTTPException(404, "demo.html not found in repository root.")
+    # Served from the same origin as the API; demo.html uses relative API calls.
+    return FileResponse(str(DEMO_HTML_PATH))
 
 
 @app.get("/users")

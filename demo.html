@@ -760,9 +760,9 @@ function getUserHistory(userId, items, dataset) {
     .sort((a,b) => b.rating - a.rating);
 }
 
-// ── LLM Re-ranking via LOCAL backend (so keys aren’t exposed) ─────────────────
-
-const API_BASE = 'http://127.0.0.1:8000';
+// ── API base ────────────────────────────────────────────────────────────────
+// Use same-origin so this works both locally and when deployed on Render.
+const API_BASE = '';
 
 async function apiJson(path, opts={}) {
   const resp = await fetch(`${API_BASE}${path}`, {
