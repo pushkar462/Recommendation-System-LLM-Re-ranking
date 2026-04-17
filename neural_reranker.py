@@ -494,11 +494,14 @@ class NeuralReranker:
         ranked_items = []
         score_map    = {c.get("item_id"): float(scores_ui[i]) for i, c in enumerate(candidates)}
         for rank, item in enumerate(ranked, start=1):
+            s = float(score_map.get(item.get("item_id"), 0.5))
             ranked_items.append({
                 **item,
                 "rank"  : rank,
-                "score" : round(score_map.get(item.get("item_id"), 0.5), 3),
-                "reason": self._generate_reason(item, user_history, score_map.get(item.get("item_id"), 0.5)),
+                # Keep full precision; UI can format. Rounding here can collapse
+                # small but meaningful differences into 0.00.
+                "score" : s,
+                "reason": self._generate_reason(item, user_history, s),
             })
 
         summary = (

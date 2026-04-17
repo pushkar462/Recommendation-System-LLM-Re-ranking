@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# Local artifacts
+checkpoints/
+data/ml-100k/

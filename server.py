@@ -56,17 +56,25 @@ reranker:  Optional[NeuralReranker]    = None
 _all_ratings: List[dict] = []
 _all_items:   List[dict] = []
 
-CHECKPOINT_DIR         = Path("./checkpoints")
-RETRIEVER_CHECKPOINT   = CHECKPOINT_DIR / "two_tower.pt"
-RERANKER_CHECKPOINT    = CHECKPOINT_DIR / "neural_reranker.pt"
-
 # ---------------------------------------------------------------------------
 # Dataset config — change these to switch datasets
 # ---------------------------------------------------------------------------
 
 DATASET_VARIANT = "ml-100k"   # was "auto" which picks ml-1m (much larger)
-SAMPLE_USERS    = 500          # cap users loaded into memory     
-                               # None = use all users
+SAMPLE_USERS    = 500         # cap users loaded into memory
+                              # None = use all users
+
+CHECKPOINT_DIR = Path("./checkpoints")
+
+# Include dataset config in checkpoint names so deployments don't accidentally
+# reuse checkpoints trained on a different dataset/user-id schema.
+def _ckpt_suffix() -> str:
+    su = "all" if SAMPLE_USERS is None else str(SAMPLE_USERS)
+    return f"{DATASET_VARIANT}__users_{su}"
+
+
+RETRIEVER_CHECKPOINT = CHECKPOINT_DIR / f"two_tower__{_ckpt_suffix()}.pt"
+RERANKER_CHECKPOINT  = CHECKPOINT_DIR / f"neural_reranker__{_ckpt_suffix()}.pt"
 
 # Training epochs — reduce for faster startup, increase for better quality
 TWO_TOWER_EPOCHS = 30
@@ -90,28 +98,53 @@ def startup():
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Two-Tower Retriever ───────────────────────────────────────────────
-    if RETRIEVER_CHECKPOINT.exists():
-        print(f"\nLoading two-tower retriever from checkpoint...")
-        retriever = TwoTowerRetriever.load(str(RETRIEVER_CHECKPOINT), _all_ratings)
-    else:
+    # Even if a checkpoint exists, validate it matches current dataset IDs.
+    # Render-like platforms can persist disk across deploys; if the dataset
+    # user-id schema changes (e.g. synthetic 'alice' vs numeric ids), the
+    # retriever would silently fall back to cold-start candidates.
+    need_train_retriever = not RETRIEVER_CHECKPOINT.exists()
+    if not need_train_retriever:
+        try:
+            print(f"\nLoading two-tower retriever from checkpoint...")
+            retriever = TwoTowerRetriever.load(str(RETRIEVER_CHECKPOINT), _all_ratings)
+
+            sample_users = get_user_ids(_all_ratings)[:5]
+            missing = [u for u in sample_users if u not in (retriever.user_feats or {})]
+            if missing:
+                print(
+                    "⚠ Two-tower checkpoint doesn't match current dataset "
+                    f"(missing users: {missing}). Re-training retriever..."
+                )
+                need_train_retriever = True
+        except Exception as e:
+            print(f"⚠ Failed to load retriever checkpoint: {e}. Re-training retriever...")
+            need_train_retriever = True
+
+    if need_train_retriever:
         print(f"\nTraining two-tower retriever (epochs={TWO_TOWER_EPOCHS})...")
         retriever = train_two_tower(
-            ratings  = _all_ratings,
-            items    = _all_items,
-            epochs   = TWO_TOWER_EPOCHS,
+            ratings=_all_ratings,
+            items=_all_items,
+            epochs=TWO_TOWER_EPOCHS,
         )
         retriever.save(str(RETRIEVER_CHECKPOINT))
 
     # ── Neural Re-ranker ──────────────────────────────────────────────────
-    if RERANKER_CHECKPOINT.exists():
-        print(f"\nLoading neural re-ranker from checkpoint...")
-        reranker = NeuralReranker.load(str(RERANKER_CHECKPOINT))
-    else:
+    need_train_reranker = not RERANKER_CHECKPOINT.exists()
+    if not need_train_reranker:
+        try:
+            print(f"\nLoading neural re-ranker from checkpoint...")
+            reranker = NeuralReranker.load(str(RERANKER_CHECKPOINT))
+        except Exception as e:
+            print(f"⚠ Failed to load reranker checkpoint: {e}. Re-training reranker...")
+            need_train_reranker = True
+
+    if need_train_reranker:
         print(f"\nTraining neural re-ranker (epochs={RERANKER_EPOCHS})...")
         reranker = NeuralReranker.train(
-            ratings = _all_ratings,
-            items   = _all_items,
-            epochs  = RERANKER_EPOCHS,
+            ratings=_all_ratings,
+            items=_all_items,
+            epochs=RERANKER_EPOCHS,
         )
         reranker.save(str(RERANKER_CHECKPOINT))
 

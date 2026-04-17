@@ -724,17 +724,30 @@ function getCandidates(userId, items, dataset, topK=20) {
   
   const seen = new Set(R[ui].map((r,i) => r > 0 ? i : -1).filter(i => i >= 0));
   
-  const scores = items.map((item, ii) => {
-    let score = 0;
-    for (let k=0; k<P[ui].length; k++) score += P[ui][k] * Q[ii][k];
-    return { item, score: Math.min(5, Math.max(1, score + 3.5)), seen: seen.has(ii) };
+  // Raw MF affinity (unbounded). We'll scale to 1..5 for display so the UI
+  // doesn't saturate at 5.00 for many items.
+  const scored = items.map((item, ii) => {
+    let raw = 0;
+    for (let k=0; k<P[ui].length; k++) raw += P[ui][k] * Q[ii][k];
+    return { item, raw, seen: seen.has(ii) };
   });
 
-  return scores
-    .filter(s => !s.seen)
-    .sort((a,b) => b.score - a.score)
+  const unseen = scored.filter(s => !s.seen);
+  if (!unseen.length) return [];
+
+  // Min-max scale raw scores → 1..5 (stable + always varied)
+  let lo = Infinity, hi = -Infinity;
+  unseen.forEach(s => { if (s.raw < lo) lo = s.raw; if (s.raw > hi) hi = s.raw; });
+  const denom = (hi - lo) > 1e-9 ? (hi - lo) : 1.0;
+
+  return unseen
+    .sort((a,b) => b.raw - a.raw)
     .slice(0, topK)
-    .map(s => ({ ...s.item, predicted_rating: Math.round(s.score * 100) / 100 }));
+    .map(s => {
+      const norm = (s.raw - lo) / denom;          // 0..1
+      const rating = 1 + norm * 4;                // 1..5
+      return { ...s.item, predicted_rating: Math.round(rating * 100) / 100 };
+    });
 }
 
 function getUserHistory(userId, items, dataset) {
@@ -865,8 +878,8 @@ function renderStage2(result) {
             ${r.reason ? `<div class="item-reason">💡 ${r.reason}</div>` : ''}
           </div>
           <div class="score-bar">
-            <div class="score-val">${r.score ? r.score.toFixed(2) : '—'}</div>
-            <div class="score-track"><div class="score-fill" style="width:${((r.score||0.5))*100}%"></div></div>
+            <div class="score-val">${(typeof r.score === 'number') ? r.score.toFixed(3) : '—'}</div>
+            <div class="score-track"><div class="score-fill" style="width:${((typeof r.score === 'number' ? r.score : 0.5))*100}%"></div></div>
           </div>
         </div>
       `).join('')}
