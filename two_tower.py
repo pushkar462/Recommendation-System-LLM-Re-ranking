@@ -489,13 +489,27 @@ class TwoTowerRetriever:
                     scores[j] = -1e9
 
         top_idx    = np.argsort(-scores)[:top_k]
+
+        # Convert raw dot-product similarity → a stable 1..5 display rating.
+        # We do NOT want to clip `score * 5` because dot products are unbounded
+        # and will saturate at 5.00 for many items, making the UI useless.
+        top_raw = scores[top_idx].astype(np.float32)
+        mu = float(np.mean(top_raw))
+        sd = float(np.std(top_raw)) + 1e-6
+
+        def _to_rating(raw: float) -> float:
+            # Z-score then sigmoid → (0,1), finally map → (1,5)
+            z = (float(raw) - mu) / sd
+            p = 1.0 / (1.0 + np.exp(-z))
+            return float(1.0 + 4.0 * p)
+
         candidates = []
         for idx in top_idx:
             iid  = self._item_id_list[idx]
             meta = self.items_by_id.get(iid, {})
             candidates.append({
                 "item_id"         : iid,
-                "predicted_rating": float(np.clip(scores[idx] * 5.0, 1.0, 5.0)),
+                "predicted_rating": _to_rating(scores[idx]),
                 **meta,
             })
         return candidates

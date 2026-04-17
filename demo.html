@@ -381,6 +381,24 @@
     margin-bottom: 24px;
   }
 
+  .history-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .link-btn {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+  }
+  .link-btn:hover { background: rgba(124,106,247,0.10); }
+
   .history-row {
     display: flex;
     gap: 10px;
@@ -502,16 +520,8 @@
     <div class="field">
       <label>User</label>
       <select id="userSelect">
-        <option value="alice">alice — Drama / Sci-Fi fan</option>
-        <option value="bob">bob — Action / Sci-Fi fan</option>
-        <option value="carol">carol — Animation / Drama fan</option>
-        <option value="dave">dave — Crime / Thriller fan</option>
-        <option value="eve">eve — Sci-Fi / Fantasy fan</option>
-        <option value="frank">frank — Romance / Drama fan</option>
-        <option value="grace">grace — Horror / Thriller fan</option>
-        <option value="henry">henry — Mystery / Crime fan</option>
-        <option value="isabella">isabella — Animation / Romance fan</option>
-        <option value="jack">jack — Action / Adventure fan</option>
+        <!-- Filled from GET /users (genre-based labels; values stay real IDs for API) -->
+        <option value="">Loading users…</option>
       </select>
     </div>
     <div class="field">
@@ -542,7 +552,12 @@
   <div id="historySection" style="display:none" class="history-section">
     <div class="section-header">
       <div class="section-title">📚 User Rating History</div>
-      <div class="section-count" id="historyCount"></div>
+      <div class="history-header-right">
+        <div class="section-count" id="historyCount"></div>
+        <button class="link-btn" id="historyToggleBtn" style="display:none" onclick="toggleHistory()">
+          Show more
+        </button>
+      </div>
     </div>
     <div class="history-row" id="historyRow"></div>
   </div>
@@ -553,7 +568,7 @@
       <div class="section-header">
         <div class="section-title">
           <span class="stage-pill s1">STAGE 1</span>
-          MF Candidates
+          Candidates (Retriever)
         </div>
         <div class="section-count" id="stage1Count">—</div>
       </div>
@@ -803,11 +818,27 @@ async function llmRerank(candidates, history, context, userId, dataset) {
   });
 }
 
-function setUserOptions(userIds) {
+function normalizeUserEntry(u) {
+  if (typeof u === 'string') {
+    return { user_id: u, label: u };
+  }
+  return {
+    user_id: u.user_id,
+    label: u.label || u.display_name || u.user_id,
+  };
+}
+
+function setUserOptions(users) {
   const sel = document.getElementById('userSelect');
   const current = sel.value;
-  sel.innerHTML = userIds.map(u => `<option value="${u}">${u}</option>`).join('');
-  if (userIds.includes(current)) sel.value = current;
+  const rows = users.map(normalizeUserEntry);
+  sel.innerHTML = rows.map(({ user_id, label }) =>
+    `<option value="${user_id}">${label}</option>`
+  ).join('');
+
+  const ids = rows.map(r => r.user_id);
+  if (ids.includes(current)) sel.value = current;
+  else if (sel.options.length) sel.selectedIndex = 0;
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
@@ -828,13 +859,39 @@ function starsFor(rating) {
   return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(5 - full - (half?1:0));
 }
 
+// ── History UI state ─────────────────────────────────────────────────────────
+const HISTORY_PREVIEW_LIMIT = 24;
+let _historyAll = [];
+let _historyExpanded = false;
+
+function toggleHistory() {
+  _historyExpanded = !_historyExpanded;
+  renderHistory(_historyAll);
+}
+
 function renderHistory(history) {
   const section = document.getElementById('historySection');
   const row = document.getElementById('historyRow');
   const count = document.getElementById('historyCount');
+  const toggleBtn = document.getElementById('historyToggleBtn');
   section.style.display = 'block';
-  count.textContent = `${history.length} rated`;
-  row.innerHTML = history.map(h => `
+
+  _historyAll = Array.isArray(history) ? history : [];
+
+  const total = _historyAll.length;
+  const shown = _historyExpanded ? total : Math.min(total, HISTORY_PREVIEW_LIMIT);
+  const slice = _historyAll.slice(0, shown);
+
+  count.textContent = `${shown}/${total} shown`;
+
+  if (total > HISTORY_PREVIEW_LIMIT) {
+    toggleBtn.style.display = 'inline-flex';
+    toggleBtn.textContent = _historyExpanded ? 'Show less' : `Show more`;
+  } else {
+    toggleBtn.style.display = 'none';
+  }
+
+  row.innerHTML = slice.map(h => `
     <div class="history-chip">
       <span>${h.title}</span>
       <span class="stars">${starsFor(h.rating)}</span>
@@ -998,7 +1055,19 @@ window.addEventListener('load', async () => {
     const u = await apiJson('/users');
     if (u && Array.isArray(u.users) && u.users.length) setUserOptions(u.users);
   } catch {
-    // Offline/static options remain.
+    // Offline demo: same 10 persona labels as backend (option values = synthetic ids).
+    setUserOptions([
+      { user_id: 'alice', label: 'alice — Drama / Sci-Fi fan' },
+      { user_id: 'bob', label: 'bob — Action / Sci-Fi fan' },
+      { user_id: 'carol', label: 'carol — Animation / Drama fan' },
+      { user_id: 'dave', label: 'dave — Crime / Thriller fan' },
+      { user_id: 'eve', label: 'eve — Sci-Fi / Fantasy fan' },
+      { user_id: 'frank', label: 'frank — Romance / Drama fan' },
+      { user_id: 'grace', label: 'grace — Horror / Thriller fan' },
+      { user_id: 'henry', label: 'henry — Mystery / Crime fan' },
+      { user_id: 'isabella', label: 'isabella — Animation / Romance fan' },
+      { user_id: 'jack', label: 'jack — Action / Adventure fan' },
+    ]);
   }
 });
 </script>

@@ -27,8 +27,10 @@ Training time estimates:
 """
 
 import os
+import re
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,16 +60,134 @@ retriever: Optional[TwoTowerRetriever] = None
 reranker:  Optional[NeuralReranker]    = None
 _all_ratings: List[dict] = []
 _all_items:   List[dict] = []
+_item_popularity: dict = {}
+_items_by_id: dict = {}
 
 # ---------------------------------------------------------------------------
 # Dataset config — change these to switch datasets
 # ---------------------------------------------------------------------------
 
-DATASET_VARIANT = "ml-100k"   # was "auto" which picks ml-1m (much larger)
+DATASET_VARIANT = "ml-1m"     # use local MovieLens-1M if present (data/ml-1m)
 SAMPLE_USERS    = 500         # cap users loaded into memory
                               # None = use all users
 
 CHECKPOINT_DIR = Path("./checkpoints")
+
+# Fixed UI personas (dropdown shows only these names). Real MovieLens users are
+# bucketed by genre affinity; each bucket gets one representative user_id for API calls.
+PERSONA_SPECS: List[tuple[str, tuple[str, str]]] = [
+    ("alice",    ("Drama", "Sci-Fi")),
+    ("bob",      ("Action", "Sci-Fi")),
+    ("carol",    ("Animation", "Drama")),
+    ("dave",     ("Crime", "Thriller")),
+    ("eve",      ("Sci-Fi", "Fantasy")),
+    ("frank",    ("Romance", "Drama")),
+    ("grace",    ("Horror", "Thriller")),
+    ("henry",    ("Mystery", "Crime")),
+    ("isabella", ("Animation", "Romance")),
+    ("jack",     ("Action", "Adventure")),
+]
+
+
+def _user_genre_weights(rlist: List[dict], items_by_id: Dict[str, dict]) -> Dict[str, float]:
+    """Per-user genre weights from ratings (rating² on primary item genre)."""
+    w: Dict[str, float] = defaultdict(float)
+    for rr in rlist:
+        it = items_by_id.get(rr.get("item_id"), {})
+        g = (it.get("genre") or "Unknown").strip() or "Unknown"
+        x = float(rr.get("rating", 3.0))
+        w[g] += x * x
+    return w
+
+
+def _persona_score(weights: Dict[str, float], g1: str, g2: str) -> float:
+    """Higher = better match to this persona's two target genres."""
+    return float(weights.get(g1, 0.0) + weights.get(g2, 0.0))
+
+
+def _build_persona_user_list(ratings: List[dict], items_by_id: Dict[str, dict]) -> List[dict]:
+    """
+    Map every loaded user → best-matching persona; return exactly 10 rows (alice..jack).
+    Each row: representative real user_id for API routes + label for UI only.
+
+    No ratings are dropped: bucketing is only for choosing which real u#### represents
+    each persona in the dropdown.
+    """
+    by_user: Dict[str, List[dict]] = defaultdict(list)
+    for r in ratings:
+        by_user[r["user_id"]].append(r)
+
+    all_uids = sorted(by_user.keys())
+    if not all_uids:
+        return []
+
+    # Non–MovieLens ids (e.g. synthetic dataset: alice, bob, …): map name → persona when possible.
+    is_movielens_style = all(re.fullmatch(r"u\d+", uid) for uid in all_uids)
+    if not is_movielens_style:
+        out = []
+        pool = list(all_uids)
+        used: set[str] = set()
+        for idx, (persona, (g1, g2)) in enumerate(PERSONA_SPECS):
+            if persona in by_user and persona not in used:
+                uid = persona
+            else:
+                rem = [u for u in pool if u not in used]
+                if rem:
+                    uid = rem[idx % len(rem)]
+                else:
+                    uid = pool[idx % len(pool)]
+            used.add(uid)
+            label = f"{persona} — {g1} / {g2} fan"
+            out.append({
+                "persona": persona,
+                "user_id": uid,
+                "label": label,
+                "genres": [g1, g2],
+                "in_bucket": 1,
+            })
+        return out
+
+    user_weights: Dict[str, Dict[str, float]] = {
+        uid: _user_genre_weights(by_user[uid], items_by_id) for uid in all_uids
+    }
+
+    # Assign each user to argmax persona by affinity score
+    buckets: Dict[str, List[str]] = {p: [] for p, _ in PERSONA_SPECS}
+    for uid in all_uids:
+        wts = user_weights[uid]
+        best_p, best_s = PERSONA_SPECS[0][0], -1.0
+        for persona, (g1, g2) in PERSONA_SPECS:
+            s = _persona_score(wts, g1, g2)
+            if s > best_s:
+                best_s, best_p = s, persona
+        buckets[best_p].append(uid)
+
+    def _rep_for_bucket(persona: str, g1: str, g2: str) -> str:
+        members = buckets.get(persona) or []
+        if members:
+            # Most ratings → richest history for the demo
+            return max(members, key=lambda u: len(by_user[u]))
+        # Empty bucket: pick real user with highest affinity to this persona anyway
+        best_uid, best_sc = all_uids[0], -1.0
+        for uid in all_uids:
+            s = _persona_score(user_weights[uid], g1, g2)
+            if s > best_sc:
+                best_sc, best_uid = s, uid
+        return best_uid
+
+    out = []
+    for persona, (g1, g2) in PERSONA_SPECS:
+        uid = _rep_for_bucket(persona, g1, g2)
+        label = f"{persona} — {g1} / {g2} fan"
+        out.append({
+            "persona" : persona,
+            "user_id" : uid,
+            "label"   : label,
+            "genres"  : [g1, g2],
+            "in_bucket": len(buckets.get(persona) or []),
+        })
+    return out
+
 
 # Include dataset config in checkpoint names so deployments don't accidentally
 # reuse checkpoints trained on a different dataset/user-id schema.
@@ -80,8 +200,8 @@ RETRIEVER_CHECKPOINT = CHECKPOINT_DIR / f"two_tower__{_ckpt_suffix()}.pt"
 RERANKER_CHECKPOINT  = CHECKPOINT_DIR / f"neural_reranker__{_ckpt_suffix()}.pt"
 
 # Training epochs — reduce for faster startup, increase for better quality
-TWO_TOWER_EPOCHS = 30
-RERANKER_EPOCHS  = 10
+TWO_TOWER_EPOCHS = 15
+RERANKER_EPOCHS  = 3
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +210,7 @@ RERANKER_EPOCHS  = 10
 
 @app.on_event("startup")
 def startup():
-    global retriever, reranker, _all_ratings, _all_items
+    global retriever, reranker, _all_ratings, _all_items, _item_popularity, _items_by_id
 
     # ── Load data ─────────────────────────────────────────────────────────
     # On Render, MovieLens files won't exist unless we download them at runtime.
@@ -107,6 +227,15 @@ def startup():
     print(f"  {len(_all_ratings):,} ratings | {len(_all_items):,} items | "
           f"{len({r['user_id'] for r in _all_ratings}):,} users")
 
+    # Build item lookup + popularity for intent-based candidate supplementation.
+    _items_by_id = {it["item_id"]: it for it in _all_items if it.get("item_id")}
+    pop = {}
+    for rr in _all_ratings:
+        iid = rr.get("item_id")
+        if iid:
+            pop[iid] = pop.get(iid, 0) + 1
+    _item_popularity = pop
+
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Two-Tower Retriever ───────────────────────────────────────────────
@@ -120,12 +249,18 @@ def startup():
             print(f"\nLoading two-tower retriever from checkpoint...")
             retriever = TwoTowerRetriever.load(str(RETRIEVER_CHECKPOINT), _all_ratings)
 
-            sample_users = get_user_ids(_all_ratings)[:5]
-            missing = [u for u in sample_users if u not in (retriever.user_feats or {})]
-            if missing:
+            # Validate checkpoint matches current dataset. We need this to be strict,
+            # otherwise some users silently fall back to cold-start retrieval.
+            current_users = set(get_user_ids(_all_ratings))
+            ckpt_users    = set((retriever.user_feats or {}).keys())
+            missing_users = sorted(list(current_users - ckpt_users))[:10]
+
+            if current_users != ckpt_users:
                 print(
                     "⚠ Two-tower checkpoint doesn't match current dataset "
-                    f"(missing users: {missing}). Re-training retriever..."
+                    f"(missing_users={missing_users}, "
+                    f"ckpt_users={len(ckpt_users):,}, current_users={len(current_users):,}). "
+                    "Re-training retriever..."
                 )
                 need_train_retriever = True
         except Exception as e:
@@ -205,7 +340,7 @@ def root():
 
 @app.get("/users")
 def list_users():
-    return {"users": get_user_ids(_all_ratings)}
+    return {"users": _build_persona_user_list(_all_ratings, _items_by_id)}
 
 
 @app.get("/history/{user_id}")
@@ -281,8 +416,53 @@ def full_pipeline(
     rr = _get_reranker()
 
     # Stage 1 — two-tower retrieval
-    candidates = r.get_candidates(user_id, top_k=candidates_k)
     history    = r.get_user_history(user_id)
+    candidates = r.get_candidates(user_id, top_k=candidates_k)
+
+    # If the user explicitly asked for a genre ("crime", "horror", ...),
+    # ensure the candidate pool contains enough items of that genre.
+    if user_context:
+        ctx = user_context.lower().replace("-", " ").replace("_", " ")
+        tokens = set(ctx.split())
+        genre_keywords = {
+            "crime": {"crime", "criminal", "mafia", "gangster", "heist", "detective", "murder"},
+            "horror": {"horror", "scary", "ghost", "monster", "haunted"},
+            "thriller": {"thriller", "suspense", "serial", "killer", "dark"},
+            "romance": {"romance", "romantic", "love"},
+            "sci-fi": {"sci", "scifi", "sci fi", "science", "space", "alien", "robot", "cyber"},
+            "mystery": {"mystery", "whodunit", "investigation"},
+            "action": {"action", "fight", "explosion", "battle"},
+            "comedy": {"comedy", "funny", "humor"},
+            "animation": {"animation", "anime", "animated", "pixar"},
+            "drama": {"drama"},
+        }
+
+        intent_genre = None
+        for g, kws in genre_keywords.items():
+            if tokens & kws:
+                intent_genre = g
+                break
+
+        if intent_genre:
+            want = 25
+            have = sum(1 for c in candidates if (c.get("genre") or "").lower() == intent_genre)
+            if have < min(want, candidates_k):
+                seen = {h.get("item_id") for h in history if h.get("item_id")}
+                existing = {c.get("item_id") for c in candidates if c.get("item_id")}
+                # Pick popular items from the requested genre, excluding seen.
+                pool = [
+                    iid for iid, it in _items_by_id.items()
+                    if (it.get("genre") or "").lower() == intent_genre
+                    and iid not in seen
+                    and iid not in existing
+                ]
+                pool.sort(key=lambda iid: -_item_popularity.get(iid, 0))
+                extra = []
+                for iid in pool[: max(0, want - have)]:
+                    it = _items_by_id.get(iid, {})
+                    extra.append({"item_id": iid, "predicted_rating": 3.0, **it})
+                if extra:
+                    candidates = candidates + extra
 
     # Stage 2 — neural re-ranking
     result = rr.rerank(

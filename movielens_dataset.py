@@ -467,7 +467,7 @@ def load_dataset(
         ratings, items = _load_ml20m(DATA_DIR)
         if sample_users:
             # Re-sample users from the already-parsed ratings
-            all_users = list({r["user_id"] for r in ratings})
+            all_users = sorted({r["user_id"] for r in ratings})
             rng       = random.Random(42)
             keep      = set(rng.sample(all_users, min(sample_users, len(all_users))))
             ratings   = [r for r in ratings if r["user_id"] in keep]
@@ -475,10 +475,26 @@ def load_dataset(
         return ratings, items
 
     if variant == "ml-1m":
-        return _load_ml1m(DATA_DIR)
+        ratings, items = _load_ml1m(DATA_DIR)
+        if sample_users:
+            all_users = sorted({r["user_id"] for r in ratings})
+            if len(all_users) > sample_users:
+                rng     = random.Random(42)
+                keep    = set(rng.sample(all_users, sample_users))
+                ratings = [r for r in ratings if r["user_id"] in keep]
+                print(f"  Sampled {len(keep):,} users → {len(ratings):,} ratings")
+        return ratings, items
 
     if variant == "ml-100k":
-        return _load_ml100k(DATA_DIR)
+        ratings, items = _load_ml100k(DATA_DIR)
+        if sample_users:
+            all_users = sorted({r["user_id"] for r in ratings})
+            if len(all_users) > sample_users:
+                rng     = random.Random(42)
+                keep    = set(rng.sample(all_users, sample_users))
+                ratings = [r for r in ratings if r["user_id"] in keep]
+                print(f"  Sampled {len(keep):,} users → {len(ratings):,} ratings")
+        return ratings, items
 
     if variant == "synthetic":
         return _synthetic_ratings(), list(_SYNTHETIC_MOVIES)
