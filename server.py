@@ -93,8 +93,15 @@ def startup():
     global retriever, reranker, _all_ratings, _all_items
 
     # ── Load data ─────────────────────────────────────────────────────────
+    # On Render, MovieLens files won't exist unless you vendor them into the repo.
+    # Fall back to the built-in synthetic dataset so the service can boot.
     print(f"\nLoading dataset (variant={DATASET_VARIANT!r})...")
-    _all_ratings, _all_items = load_dataset(DATASET_VARIANT, sample_users=SAMPLE_USERS)
+    try:
+        _all_ratings, _all_items = load_dataset(DATASET_VARIANT, sample_users=SAMPLE_USERS)
+    except FileNotFoundError as e:
+        print(f"⚠ {e}")
+        print("⚠ Falling back to synthetic dataset (no external files required).")
+        _all_ratings, _all_items = load_dataset("synthetic", sample_users=SAMPLE_USERS)
     print(f"  {len(_all_ratings):,} ratings | {len(_all_items):,} items | "
           f"{len({r['user_id'] for r in _all_ratings}):,} users")
 
