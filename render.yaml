@@ -1,0 +1,18 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Connect repo: New → Blueprint → select this repo.
+# Or: Web Service → Docker → same Dockerfile.
+
+services:
+  - type: web
+    name: recsys-llm-rerank
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # Smaller sample = faster cold start & less RAM on free tier (optional).
+      - key: SAMPLE_USERS
+        value: "300"

@@ -65,11 +65,21 @@ _items_by_id: dict = {}
 
 # ---------------------------------------------------------------------------
 # Dataset config — change these to switch datasets
+# (Override on Render etc.: DATASET_VARIANT, SAMPLE_USERS)
 # ---------------------------------------------------------------------------
 
-DATASET_VARIANT = "ml-1m"     # use local MovieLens-1M if present (data/ml-1m)
-SAMPLE_USERS    = 500         # cap users loaded into memory
-                              # None = use all users
+def _sample_users_from_env() -> Optional[int]:
+    raw = os.environ.get("SAMPLE_USERS")
+    if raw is None or str(raw).strip() == "":
+        return 500
+    s = str(raw).strip().lower()
+    if s in ("all", "none", "0"):
+        return None
+    return int(s)
+
+
+DATASET_VARIANT = (os.environ.get("DATASET_VARIANT") or "ml-1m").strip() or "ml-1m"
+SAMPLE_USERS    = _sample_users_from_env()  # None = use all users (heavy)
 
 CHECKPOINT_DIR = Path("./checkpoints")
 
