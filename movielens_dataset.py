@@ -32,6 +32,7 @@ import os
 import csv
 import random
 import zipfile
+import urllib.request
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
@@ -40,6 +41,63 @@ from typing import List, Tuple, Dict, Optional
 # ---------------------------------------------------------------------------
 
 DATA_DIR = Path(os.path.dirname(__file__)) / "data"
+
+ML_100K_ZIP_URL = "https://files.grouplens.org/datasets/movielens/ml-100k.zip"
+
+
+def ensure_ml100k_downloaded(data_dir: Path = DATA_DIR) -> bool:
+    """
+    Ensure MovieLens-100K exists at ./data/ml-100k/.
+    Returns True if present (already or after download), False if download failed.
+    """
+    target_dir = data_dir / "ml-100k"
+    ratings_path = target_dir / "u.data"
+    movies_path = target_dir / "u.item"
+    if ratings_path.exists() and movies_path.exists():
+        return True
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = data_dir / ".ml-100k.download.lock"
+    zip_path = data_dir / "ml-100k.zip"
+
+    # Best-effort lock so multiple workers don't download simultaneously.
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        have_lock = True
+    except FileExistsError:
+        have_lock = False
+
+    try:
+        # If another process is downloading, wait briefly for files to appear.
+        if not have_lock:
+            for _ in range(60):  # ~30s
+                if ratings_path.exists() and movies_path.exists():
+                    return True
+                import time
+                time.sleep(0.5)
+            return False
+
+        print(f"Downloading MovieLens-100K from {ML_100K_ZIP_URL} ...")
+        urllib.request.urlretrieve(ML_100K_ZIP_URL, zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(data_dir)
+        try:
+            zip_path.unlink(missing_ok=True)  # py3.11+
+        except TypeError:
+            if zip_path.exists():
+                zip_path.unlink()
+
+        return ratings_path.exists() and movies_path.exists()
+    except Exception as e:
+        print(f"⚠ Failed to download/unzip MovieLens-100K: {e}")
+        return False
+    finally:
+        if have_lock:
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

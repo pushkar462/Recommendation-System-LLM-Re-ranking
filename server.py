@@ -35,7 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from movielens_dataset import load_dataset, get_user_ids
+from movielens_dataset import load_dataset, get_user_ids, ensure_ml100k_downloaded
 from two_tower import TwoTowerRetriever, train_two_tower
 from neural_reranker import NeuralReranker
 
@@ -93,10 +93,12 @@ def startup():
     global retriever, reranker, _all_ratings, _all_items
 
     # ── Load data ─────────────────────────────────────────────────────────
-    # On Render, MovieLens files won't exist unless you vendor them into the repo.
-    # Fall back to the built-in synthetic dataset so the service can boot.
+    # On Render, MovieLens files won't exist unless we download them at runtime.
+    # Try to auto-download ML-100K, then fall back to synthetic only if that fails.
     print(f"\nLoading dataset (variant={DATASET_VARIANT!r})...")
     try:
+        if DATASET_VARIANT == "ml-100k":
+            ensure_ml100k_downloaded()
         _all_ratings, _all_items = load_dataset(DATASET_VARIANT, sample_users=SAMPLE_USERS)
     except FileNotFoundError as e:
         print(f"⚠ {e}")
